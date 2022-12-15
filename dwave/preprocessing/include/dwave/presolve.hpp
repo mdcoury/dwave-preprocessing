@@ -15,13 +15,14 @@
 #pragma once
 
 #include <algorithm>
+#include <execution>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include "dimod/constrained_quadratic_model.h"
 #include "taskflow/core/taskflow.hpp"
 #include "taskflow/taskflow.hpp"
-#include "dimod/constrained_quadratic_model.h"
 
 namespace dwave {
 namespace presolve {
@@ -159,13 +160,11 @@ class Presolver {
         bool loop_changed;
         bool model_feasible = true;
 
-        bool operator=(const struct TfHelper& that) {
-            return true;
-        }
+        bool operator=(const struct TfHelper& that) { return true; }
     };
 
     struct TfHelper tf_helper_;
-    
+
     void load_taskflow_onetime();
     void load_taskflow_trivial(int max_rounds = 100);
     void load_taskflow_cleanup();
@@ -212,21 +211,24 @@ class Presolver {
         }
     }
     void technique_remove_offsets() {
-        for (size_type c = 0; c < model_.num_constraints(); ++c) {
-            auto& constraint = model_.constraint_ref(c);
-            if (constraint.offset()) {
-                constraint.set_rhs(constraint.rhs() - constraint.offset());
-                constraint.set_offset(0);
-            }
-        }
+        auto constraints = model_.get_constraints();
+        std::for_each(
+                std::execution::par_unseq, constraints.begin(), constraints.end(),
+                [](auto&& constraint_ptr) {
+                    if (constraint_ptr->offset()) {
+                        constraint_ptr->set_rhs(constraint_ptr->rhs() - constraint_ptr->offset());
+                        constraint_ptr->set_offset(0);
+                    }
+                });
     }
     void technique_flip_constraints() {
-        for (size_type c = 0; c < model_.num_constraints(); ++c) {
-            auto& constraint = model_.constraint_ref(c);
-            if (constraint.sense() == dimod::Sense::GE) {
-                constraint.scale(-1);
-            }
-        }
+        auto constraints = model_.get_constraints();
+        std::for_each(std::execution::par_unseq, constraints.begin(), constraints.end(),
+                      [](auto&& constraint_ptr) {
+                          if (constraint_ptr->sense() == dimod::Sense::GE) {
+                              constraint_ptr->scale(-1);
+                          }
+                      });
     }
     void technique_remove_self_loops() {
         std::unordered_map<index_type, index_type> mapping;
@@ -359,9 +361,11 @@ class Presolver {
         bool ret = false;
 
         ret |= remove_zero_biases(model_.objective);
-        for (size_t c = 0; c < model_.num_constraints(); ++c) {
-            ret |= remove_zero_biases(model_.constraint_ref(c));
-        }
+        auto constraints = model_.get_constraints();
+        std::for_each(std::execution::par_unseq, constraints.begin(), constraints.end(),
+                      [&](auto&& constraint_ptr) {
+                          ret |= remove_zero_biases(*constraint_ptr);
+                      });
 
         return ret;
     }
@@ -392,7 +396,7 @@ class Presolver {
         return ret;
     }
     bool technique_remove_fixed_variables() {
-        bool ret = false; 
+        bool ret = false;
         size_type v = 0;
         while (v < model_.num_variables()) {
             if (model_.lower_bound(v) == model_.upper_bound(v)) {
@@ -446,10 +450,9 @@ void Presolver<bias_type, index_type, assignment_type>::apply() {
 
     tf_helper_.executor.run(tf_helper_.taskflow_onetime).wait();
     tf_helper_.executor.run(tf_helper_.taskflow_trivial).wait();
-    if(tf_helper_.model_feasible) {
+    if (tf_helper_.model_feasible) {
         tf_helper_.executor.run(tf_helper_.taskflow_cleanup).wait();
-    }
-    else {
+    } else {
         // need this exact message for Python
         throw std::logic_error("infeasible");
     }
@@ -478,11 +481,8 @@ void Presolver<bias_type, index_type, assignment_type>::load_default_presolvers(
 template <class bias_type, class index_type, class assignment_type>
 void Presolver<bias_type, index_type, assignment_type>::load_taskflow_onetime() {
     auto [a, b, c, d] = tf_helper_.taskflow_onetime.emplace(
-        [&]() { technique_spin_to_binary(); },
-        [&]() { technique_remove_offsets(); },
-        [&]() { technique_flip_constraints(); },
-        [&]() { technique_remove_self_loops(); }
-    );
+            [&]() { technique_spin_to_binary(); }, [&]() { technique_remove_offsets(); },
+            [&]() { technique_flip_constraints(); }, [&]() { technique_remove_self_loops(); });
 
     a.name("spin_to_binary");
     b.name("remove_offsets");
@@ -496,42 +496,33 @@ void Presolver<bias_type, index_type, assignment_type>::load_taskflow_onetime() 
 
 template <class bias_type, class index_type, class assignment_type>
 void Presolver<bias_type, index_type, assignment_type>::load_taskflow_trivial(int max_rounds) {
-    auto alpha = tf_helper_.taskflow_trivial.emplace(
-        [&]() {
-            tf_helper_.loop_changed = false;
-            tf_helper_.loop_counter = 0;
-        }
-    );
+    auto alpha = tf_helper_.taskflow_trivial.emplace([&]() {
+        tf_helper_.loop_changed = false;
+        tf_helper_.loop_counter = 0;
+    });
     auto [a, b, c, d, e] = tf_helper_.taskflow_trivial.emplace(
-        [&]() { tf_helper_.loop_changed |= technique_remove_zero_biases(); },
-        [&]() { tf_helper_.loop_changed |= technique_check_for_nan(); },
-        [&]() { tf_helper_.loop_changed |= technique_remove_single_variable_constraints(); },
-        [&]() 
-            { 
-                if(tf_helper_.model_feasible) {
-                    tf_helper_.loop_changed |= technique_tighten_bounds(); 
+            [&]() { tf_helper_.loop_changed |= technique_remove_zero_biases(); },
+            [&]() { tf_helper_.loop_changed |= technique_check_for_nan(); },
+            [&]() { tf_helper_.loop_changed |= technique_remove_single_variable_constraints(); },
+            [&]() {
+                if (tf_helper_.model_feasible) {
+                    tf_helper_.loop_changed |= technique_tighten_bounds();
                 }
             },
-        [&]() 
-            { 
-                if(tf_helper_.model_feasible) {
-                    tf_helper_.loop_changed |= technique_remove_fixed_variables(); 
+            [&]() {
+                if (tf_helper_.model_feasible) {
+                    tf_helper_.loop_changed |= technique_remove_fixed_variables();
                 }
-            }
-    );
-    auto omega = tf_helper_.taskflow_trivial.emplace(
-        [&]() {
-            if(tf_helper_.model_feasible 
-                    && tf_helper_.loop_changed 
-                    && ++tf_helper_.loop_counter < max_rounds
-            ) {
-                tf_helper_.loop_changed = false;
-                return 0; // This will take us back to (a)
-            }
-            return 1; // This will cause us to exit
+            });
+    auto omega = tf_helper_.taskflow_trivial.emplace([&]() {
+        if (tf_helper_.model_feasible && tf_helper_.loop_changed &&
+            ++tf_helper_.loop_counter < max_rounds) {
+            tf_helper_.loop_changed = false;
+            return 0;  // This will take us back to (a)
         }
-    );
-    
+        return 1;  // This will cause us to exit
+    });
+
     alpha.name("initialize");
     a.name("remove_zero_biases");
     b.name("check_for_nan");
@@ -546,14 +537,12 @@ void Presolver<bias_type, index_type, assignment_type>::load_taskflow_trivial(in
     c.precede(d);
     d.precede(e);
     e.precede(omega);
-    omega.precede(a); // loops back to (a) iff omega returns 0; o/w this will exit the taskflow 
+    omega.precede(a);  // loops back to (a) iff omega returns 0; o/w this will exit the taskflow
 }
 
 template <class bias_type, class index_type, class assignment_type>
 void Presolver<bias_type, index_type, assignment_type>::load_taskflow_cleanup() {
-    auto a = tf_helper_.taskflow_cleanup.emplace(
-        [&]() { technique_remove_invalid_markers(); }
-    );
+    auto a = tf_helper_.taskflow_cleanup.emplace([&]() { technique_remove_invalid_markers(); });
     a.name("remove_invalid_markers");
 }
 
