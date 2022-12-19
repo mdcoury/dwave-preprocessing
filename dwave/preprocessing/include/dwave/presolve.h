@@ -212,7 +212,7 @@ class Presolver {
         }
     }
     void technique_remove_offsets() {
-        auto constraints = model_.get_constraints();
+        auto constraints = model_.constraints;
         std::for_each(
                 std::execution::par_unseq, constraints.begin(), constraints.end(),
                 [](auto&& constraint_ptr) {
@@ -223,7 +223,7 @@ class Presolver {
                 });
     }
     void technique_flip_constraints() {
-        auto constraints = model_.get_constraints();
+        auto constraints = model_.constraints;
         std::for_each(std::execution::par_unseq, constraints.begin(), constraints.end(),
                       [](auto&& constraint_ptr) {
                           if (constraint_ptr->sense() == dimod::Sense::GE) {
@@ -362,7 +362,7 @@ class Presolver {
         bool ret = false;
 
         ret |= remove_zero_biases(model_.objective);
-        auto constraints = model_.get_constraints();
+        auto constraints = model_.constraints;
         std::for_each(std::execution::par_unseq, constraints.begin(), constraints.end(),
                       [&](auto&& constraint_ptr) {
                           ret |= remove_zero_biases(*constraint_ptr);
