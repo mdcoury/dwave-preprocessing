@@ -177,8 +177,8 @@ class Presolver {
         tf::Taskflow taskflow_onetime;
         tf::Taskflow taskflow_trivial;
         tf::Taskflow taskflow_cleanup;
-        uint32_t loop_counter;
-        bool loop_changed;
+        uint32_t loop_counter = 0;
+        bool loop_changed = false;
         bool model_feasible = true;
 
         bool operator=(const struct TfHelper& that) { return true; }
